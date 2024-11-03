@@ -1,0 +1,9 @@
+2024-11-03 01:12:38 - INFO - Running trading bot for AAPL using sma_crossover_strategy strategy
+2024-11-03 01:12:39 - INFO - No trading signal for AAPL
+2024-11-03 01:13:39 - INFO - Running trading bot for AAPL using sma_crossover_strategy strategy
+2024-11-03 01:13:40 - INFO - No trading signal for AAPL
+2024-11-03 01:14:40 - INFO - Running trading bot for AAPL using sma_crossover_strategy strategy
+2024-11-03 01:14:40 - INFO - No trading signal for AAPL
+2024-11-03 02:15:50 - ERROR - 
+1 Failed download:
+2024-11-03 02:15:50 - ERROR - ['BAE']: Exception('%ticker%: No price data found, symbol may be delisted (1d 2020-01-01 -> 2024-01-01)')
