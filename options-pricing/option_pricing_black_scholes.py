@@ -184,7 +184,7 @@ class BlackScholesOption:
         except Exception as e:
             print(f"Error when calculating theta for option: {e}.")
 
-    def calc_vega(self, d1):
+    def calc_vega(self, d1) -> Tuple[float, float]:
         """
         Calculate vega - first derivative of option price with respect to volatility.
         Same value for calls and puts (given as a percentage).
