@@ -243,7 +243,7 @@ class BlackScholesEuropeanOption:
             | (float): Option epsilon if successful. None otherwise.
         """
         if not self.q:
-            return None
+            return 0.0
         if self.option_type not in {"Call", "Put"}:
             print(
                 f"Error - invalid option type: {self.option_type}. Must be 'Call' or 'Put'."
