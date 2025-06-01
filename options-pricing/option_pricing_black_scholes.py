@@ -8,6 +8,7 @@
 # ---------------------------- IMPORTS ---------------------------- #
 
 import numpy as np
+import matplotlib.pyplot as plt
 from scipy.stats import norm
 
 
@@ -79,7 +80,7 @@ class BlackScholesEuropeanOption:
             "Dividend yield: ": self.q,
         }
 
-    # ---------------------------- OPTION PRICING ---------------------------- #
+    # ---------------------------- BLACK-SCHOLES OPTION PRICING ---------------------------- #
 
     def calc_d1(self) -> float:
         """
@@ -445,3 +446,97 @@ class BlackScholesEuropeanOption:
 
         except Exception as e:
             print(f"Error when calculating ultima for option: {e}.")
+
+
+# ---------------------------- GREEKS P&L DECOMPOSITION ---------------------------- #
+
+
+def greeks_pnl_decomposition(option_t1, dt, realised_vol, dsigma, dr, is_delta_hedged):
+    """
+    Decompose P&L in terms of greeks.
+    """
+    # Market changes between t and t + dt
+    dS = -option_t1.S * realised_vol * dt**0.5
+    t2 = option_t1.T - dt
+    s2 = option_t1.S + dS
+    sigma2 = option_t1.sigma + dsigma
+    option_t2 = BlackScholesEuropeanOption(
+        s2, option_t1.K, t2, option_t1.r, sigma2, option_t1.option_type, option_t1.q
+    )
+    dPnL = option_t2.price - option_t1.price - option_t1.delta * dS * is_delta_hedged
+    print("P&L: " + str(dPnL))
+    # Compute greeks
+    delta_PnL = option_t1.delta * dS * (1 - is_delta_hedged)
+    gamma_PnL = 0.5 * option_t1.gamma * dS**2
+    speed_PnL = (1 / 6) * option_t1.speed * dS**3
+    theta_PnL = option_t1.theta * dt
+    charm_PnL = option_t1.charm * dS * dt
+    color_PnL = option_t1.color * dS**2 * dt
+    vega_PnL = option_t1.vega * dsigma
+    vomma_PnL = 0.5 * option_t1.vomma * dsigma**2
+    ultima_PnL = (1 / 6) * option_t1.ultima * dsigma**3
+    vanna_PnL = option_t1.vanna * dS * dsigma
+    vera_PnL = option_t1.vera * dsigma * dt
+    veta_PnL = option_t1.veta * dt
+    zomma_PnL = option_t1.zomma * dS**2 * dsigma
+    epsilon_PnL = option_t1.epsilon * dr
+    rho_PnL = option_t1.rho * dr
+    # Sum of all explained terms
+    explained = sum(
+        [
+            delta_PnL,
+            gamma_PnL,
+            speed_PnL,
+            theta_PnL,
+            charm_PnL,
+            color_PnL,
+            vega_PnL,
+            vomma_PnL,
+            ultima_PnL,
+            vanna_PnL,
+            vera_PnL,
+            veta_PnL,
+            zomma_PnL,
+            epsilon_PnL,
+            rho_PnL,
+        ]
+    )
+    unexplained = dPnL - explained
+    # Plot P&L decomposition
+    y = [
+        delta_PnL,
+        theta_PnL,
+        vega_PnL,
+        rho_PnL,
+        epsilon_PnL,
+        gamma_PnL,
+        vomma_PnL,
+        vanna_PnL,
+        charm_PnL,
+        veta_PnL,
+        vera_PnL,
+        speed_PnL,
+        zomma_PnL,
+        color_PnL,
+        ultima_PnL,
+        unexplained,
+    ]
+    x = [
+        "delta",
+        "theta",
+        "vega",
+        "rho",
+        "epsilon",
+        "gamma",
+        "vomma",
+        "vanna",
+        "charm",
+        "veta",
+        "vera",
+        "speed",
+        "zomma",
+        "color",
+        "ultima",
+        "unexplained",
+    ]
+    return x, y
