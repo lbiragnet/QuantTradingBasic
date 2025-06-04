@@ -219,6 +219,58 @@ def simulate_permutations(
     plt.show()
 
 
+# ---------------------------- WALK-FORWARD TEST ---------------------------- #
+
+
+def walkforward_test(
+    returns: pd.DataFrame,
+    strategy_name: str,
+    param_grid,
+    train_lookback: int = 252 * 4,  # 4 years of daily data
+    train_step: int = 21,  # Step forward by ~1 month
+) -> pd.Series:
+    """
+    Perform walkforward optimization and backtest.
+    Args:
+        | returns (pd.DataFrame): Historical price data.
+        | strategy_name (str): Strategy name ('donchian', 'ma_cross', etc.).
+        | param_grid: Parameter grid for optimization.
+        | train_lookback (int): Size of training window (in rows).
+        | train_step (int): Step size for re-optimization.
+    Returns:
+        | wf_signal (pd.Series): Strategy signal generated via walkforward testing.
+    """
+    log_returns = np.log(returns["Close"]).diff().shift(-1)
+    n = len(returns)
+    wf_signal = pd.Series(index=returns.index, dtype=float)
+    next_train = train_lookback
+    while next_train < n:
+        # Train slice
+        train_data = returns.iloc[next_train - train_lookback : next_train]
+        # Optimize on training window
+        best_params, _, _ = run_backtest(train_data, strategy_name, param_grid)
+        # Apply to current point (just the next day)
+        if strategy_name == "donchian":
+            signal = donchian_breakout(returns, **best_params)
+        elif strategy_name == "ma_cross":
+            signal = moving_average_crossover(returns, **best_params)
+        elif strategy_name == "mean_revert":
+            signal = mean_reversion_zscore(returns, **best_params)
+        else:
+            raise ValueError("Unknown strategy")
+        start_idx = next_train
+        end_idx = min(next_train + train_step, n)
+        # Apply best parameters to full data, and slice next segment
+        full_signal = signal
+        wf_signal.iloc[start_idx:end_idx] = full_signal.iloc[start_idx:end_idx]
+        next_train += train_step
+    wf_signal = wf_signal.ffill()
+    return wf_signal
+
+
+# ---------------------------- WALK-FORWARD PERMUTATION TEST ---------------------------- #
+
+
 # ---------------------------- PLOT LOG RETURNS ---------------------------- #
 
 
@@ -243,7 +295,7 @@ def plot_strategy_cumulative_log_returns(
 
 # ---------------------------- MAIN ---------------------------- #
 
-# In-sample initial test - optimise strategies
+# Run in-sample initial test - optimise strategies
 """
 if __name__ == "__main__":
     ticker = "GBPUSD=X"
@@ -270,7 +322,7 @@ if __name__ == "__main__":
 """
 
 
-# In-sample permutation test setup - verify permutation
+# Run in-sample permutation test setup - verify permutation
 """
 if __name__ == "__main__":
     ticker = "GBPUSD=X"
@@ -307,7 +359,8 @@ if __name__ == "__main__":
 """
 
 
-# In-Sample permutation test
+# Run in-Sample permutation test
+"""
 if __name__ == "__main__":
     ticker = "GBPUSD=X"
     start_date = "2016-01-01"
@@ -319,3 +372,34 @@ if __name__ == "__main__":
     param_grid_donchian = [{"lookback": x} for x in range(5, 250)]
     plt.style.use("dark_background")
     simulate_permutations(returns_df, strategy_name, param_grid_donchian, permutations)
+"""
+
+
+# Run walkforward test
+
+if __name__ == "__main__":
+    ticker = "GBPUSD=X"
+    start_date = "2016-01-01"
+    end_date = "2021-01-01"
+    returns_df = yf.download(ticker, start=start_date, end=end_date)
+    returns_df.columns = returns_df.columns.get_level_values(0)
+    plt.style.use("dark_background")
+    param_grid_donchian = [{"lookback": x} for x in range(5, 250)]
+    param_grid_ma = [
+        {"short": s, "long": l} for s in range(5, 90) for l in range(90, 365) if s < l
+    ]
+    param_grid_mr = [{"lookback": x} for x in range(10, 365)]
+    for strat, grid in zip(
+        ["donchian", "ma_cross", "mean_revert"],
+        [param_grid_donchian, param_grid_ma, param_grid_mr],
+    ):
+        print(f"Running walkforward test for {strat} strategy...")
+        wf_signal = walkforward_test(returns_df, strat, grid)
+        pf, sharpe = evaluate_strategy(
+            wf_signal, np.log(returns_df["Close"]).diff().shift(-1)
+        )
+        print(f"Walkforward {strat} strategy:")
+        print(f"  Profit Factor: {pf:.2f}")
+        print(f"  Sharpe Ratio: {sharpe:.2f}\n")
+        plot_strategy_cumulative_log_returns(returns_df, wf_signal, f"{strat} (WF)")
+    plt.show()
