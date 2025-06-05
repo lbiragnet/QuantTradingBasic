@@ -12,6 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from strategy_examples import *
 from typing import List, Union
+from joblib import Parallel, delayed
 
 
 # ---------------------------- IN-SAMPLE INITIAL TEST ---------------------------- #
@@ -38,7 +39,7 @@ def evaluate_strategy(signal: pd.Series, returns: pd.DataFrame) -> tuple[float, 
 
 def run_backtest(returns: pd.DataFrame, strategy_name: str, param_grid):
     """
-    Run a backtest for a particular strategy.
+    First step in strategy testing - run an initial test on in-sample data.
     This function optimises the strategy based on some given price time series.
     Args:
         | returns (pd.DataFrame): Historical price data for a ticker.
@@ -155,7 +156,7 @@ def get_permutation(
         return perm_returns[0]
 
 
-def simulate_permutations(
+def permutation_test(
     returns: pd.DataFrame,
     strategy_name: str,
     param_grid,
@@ -164,9 +165,9 @@ def simulate_permutations(
     seed=None,
 ):
     """
-    This function performs a Monte Carlo simulation using permutations.
-    It is used as an in-sample test for assessing data mining bias/overfitting.
-    It optimises a strategy using real price data and permuted price time series.
+    Second step in strategy testing - run an in-sample permutation test.
+    It is used for assessing data mining bias/overfitting, and optimises a strategy using real price data
+    and permuted price time series.
     It produces two figures:
         1) A plot of log returns on real data for the strategy optimised on real in-sample data,
            and of log returns on real data for the stragies optimised on permuted in-sample data.
@@ -213,13 +214,13 @@ def simulate_permutations(
     pd.Series(permuted_profit_factors).hist(color="blue", label="Permutations")
     plt.axvline(pf_real, color="red", label="Real")
     plt.xlabel("Profit Factor")
-    plt.title(f"In-sample MCPT. P-Value: {insample_perm_pval}")
+    plt.title(f"In-sample MCPT P-Value = {insample_perm_pval}")
     plt.grid(False)
     plt.legend()
     plt.show()
 
 
-# ---------------------------- WALK-FORWARD TEST ---------------------------- #
+# ---------------------------- WALKFORWARD TEST ---------------------------- #
 
 
 def walkforward_test(
@@ -230,7 +231,9 @@ def walkforward_test(
     train_step: int = 21,  # Step forward by ~1 month
 ) -> pd.Series:
     """
-    Perform walkforward optimization and backtest.
+    Third step in strategy testing - run a walkforward test.
+    Effectively uses out-of-sample data for evaluating a strategy, optimising it based on
+    a time window and then using this to perform trades in the next time window.
     Args:
         | returns (pd.DataFrame): Historical price data.
         | strategy_name (str): Strategy name ('donchian', 'ma_cross', etc.).
@@ -268,7 +271,135 @@ def walkforward_test(
     return wf_signal
 
 
-# ---------------------------- WALK-FORWARD PERMUTATION TEST ---------------------------- #
+# ---------------------------- WALKFORWARD PERMUTATION TEST ---------------------------- #
+
+
+def single_wf_permutation_test(
+    returns, strategy_name, param_grid, train_lookback, train_step, seed
+):
+    """
+    Building block for walkforward permutation test - conduct one permutation test
+    Args:
+        | returns (pd.DataFrame): Historical price data a ticker.
+        | strategy_name (str): Name of the strategy.
+        | param_grid: Grid of parameters for the strategy.
+        | train_lookback (int): Size of training window (in rows).
+        | train_step (int): Step size for re-optimization.
+        | seed: Seed for random selection.
+    """
+    perm_wf = get_permutation(returns.copy(), train_lookback, seed)
+    perm_log_returns = np.log(perm_wf["Close"]).diff().shift(-1)
+    perm_wf_signal = walkforward_test(
+        perm_wf, strategy_name, param_grid, train_lookback, train_step
+    )
+    perm_pf, _ = evaluate_strategy(perm_wf_signal, perm_log_returns)
+    return perm_pf
+
+
+def walkforward_permutation_test_parallelised(
+    returns: pd.DataFrame,
+    strategy_name: str,
+    param_grid,
+    n_permutations: int = 100,
+    seed=None,
+    train_lookback: int = 252 * 4,
+    train_step: int = 21,
+    n_jobs: int = -1,  # Use all available CPU cores
+):
+    """
+    Fourth step in strategy testing - run a walkforward permutation test.
+    Uses out-of-sample data for evaluating a strategy, optimising it based on a time window and
+    then using this to perform trades in the next time window, using permutations.
+    This is quite slow, hence the 100 default permutations used.
+    Args:
+        | returns (pd.DataFrame): Historical price data a ticker.
+        | strategy_name (str): Name of the strategy.
+        | param_grid: Grid of parameters for the strategy.
+        | n_permutations (int): Number of permutations to use (recommended is 100).
+        | seed: Seed for random selection.
+        | train_lookback (int): Size of training window (in rows).
+        | train_step (int): Step size for re-optimization.
+        | n_jobs (int): Used for parallelising execution.
+    """
+    log_returns = np.log(returns["Close"]).diff().shift(-1)
+    wf_signal = walkforward_test(
+        returns, strategy_name, param_grid, train_lookback, train_step
+    )
+    real_pf, real_sharpe = evaluate_strategy(wf_signal, log_returns)
+    print(f"Walkforward PF = {real_pf}")
+    np.random.seed(seed)
+    seeds = np.random.randint(0, 1e6, size=n_permutations)
+    perm_pfs = Parallel(n_jobs=n_jobs)(
+        delayed(single_wf_permutation_test)(
+            returns, strategy_name, param_grid, train_lookback, train_step, s
+        )
+        for s in seeds
+    )
+    perm_better_count = sum([pf >= real_pf for pf in perm_pfs])
+    wf_mcpt_pval = perm_better_count / n_permutations
+    print(f"Walkforward MCPT P-Value = {wf_mcpt_pval:.4f}")
+    # Plot
+    plt.style.use("dark_background")
+    pd.Series(perm_pfs).hist(color="blue", label="Permuted PFs")
+    plt.axvline(real_pf, color="red", linestyle="--", label="Real PF")
+    plt.title(f"Walkforward MCPT\nP-Value: {wf_mcpt_pval:.4f}")
+    plt.xlabel("Profit Factor")
+    plt.legend()
+    plt.show()
+    return wf_mcpt_pval
+
+
+def walkforward_permutation_test(
+    returns: pd.DataFrame,
+    strategy_name: str,
+    param_grid,
+    n_permutations: int = 10,
+    seed=None,
+    train_lookback: int = 252 * 4,  # 4 years of daily data
+    train_step: int = 21,  # Step forward by ~1 month
+):
+    """
+    Fourth step in strategy testing - run a walkforward permutation test.
+    Uses out-of-sample data for evaluating a strategy, optimising it based on a time window and
+    then using this to perform trades in the next time window. It uses permutations to
+    Args:
+        | returns (pd.DataFrame): Historical price data a ticker.
+        | strategy_name (str): Name of the strategy.
+        | param_grid: Grid of parameters for the strategy.
+        | n_permutations (int): Number of permutations to use (recommended is 1000).
+        | start_index (int): Index to start permutation.
+        | seed: Seed for random selection.
+        | train_lookback (int): Size of training window (in rows).
+        | train_step (int): Step size for re-optimization.
+    """
+    log_returns = np.log(returns["Close"]).diff().shift(-1)
+    wf_signal = walkforward_test(
+        returns, strategy_name, param_grid, train_lookback, train_step
+    )
+    real_wf_pf, real_wf_sharpe = evaluate_strategy(wf_signal, log_returns)
+    print(f"Walkforward PF = {real_wf_pf}.")
+    perm_better_count = 1
+    permuted_profit_factors = []
+    for _ in range(1, n_permutations):
+        perm_wf = get_permutation(returns, train_lookback, seed)
+        perm_log_returns = np.log(perm_wf["Close"]).diff().shift(-1)
+        perm_wf_signal = walkforward_test(
+            perm_wf, strategy_name, param_grid, train_lookback, train_step
+        )
+        perm_wf_pf, perm_wf_sharpe = evaluate_strategy(perm_wf_signal, perm_log_returns)
+        if perm_wf_pf >= real_wf_pf:
+            perm_better_count += 1
+        permuted_profit_factors.append(perm_wf_pf)
+    wf_mcpt_pval = perm_better_count / n_permutations
+    print(f"Walkforward MCPT P-Value = {wf_mcpt_pval}")
+    plt.style.use("dark_background")
+    pd.Series(permuted_profit_factors).hist(color="blue", label="Permutations")
+    plt.axvline(real_wf_pf, color="red", label="Real")
+    plt.xlabel("Profit Factor")
+    plt.title(f"Walkforward MCPT. P-Value: {wf_mcpt_pval}")
+    plt.grid(False)
+    plt.legend()
+    plt.show()
 
 
 # ---------------------------- PLOT LOG RETURNS ---------------------------- #
@@ -371,13 +502,13 @@ if __name__ == "__main__":
     strategy_name = "donchian"
     param_grid_donchian = [{"lookback": x} for x in range(5, 250)]
     plt.style.use("dark_background")
-    simulate_permutations(returns_df, strategy_name, param_grid_donchian, permutations)
+    permutation_test(returns_df, strategy_name, param_grid_donchian, permutations)
 """
 
 
 # Run walkforward test
 
-if __name__ == "__main__":
+"""if __name__ == "__main__":
     ticker = "GBPUSD=X"
     start_date = "2016-01-01"
     end_date = "2021-01-01"
@@ -402,4 +533,31 @@ if __name__ == "__main__":
         print(f"  Profit Factor: {pf:.2f}")
         print(f"  Sharpe Ratio: {sharpe:.2f}\n")
         plot_strategy_cumulative_log_returns(returns_df, wf_signal, f"{strat} (WF)")
+    plt.show()"""
+
+
+# Run walkforward permutation test
+
+if __name__ == "__main__":
+    ticker = "GBPUSD=X"
+    start_date = "2016-01-01"
+    end_date = "2021-01-01"
+    returns_df = yf.download(ticker, start=start_date, end=end_date)
+    returns_df.columns = returns_df.columns.get_level_values(0)
+    plt.style.use("dark_background")
+    param_grid_donchian = [{"lookback": x} for x in range(5, 250)]
+    param_grid_mr = [{"lookback": x} for x in range(10, 365)]
+    for strat, grid in zip(
+        ["donchian", "mean_revert"],
+        [param_grid_donchian, param_grid_mr],
+    ):
+        print(f"Running walkforward test for {strat} strategy...")
+        wf_signal = walkforward_permutation_test_parallelised(returns_df, strat, grid)
+        """pf, sharpe = evaluate_strategy(
+            wf_signal, np.log(returns_df["Close"]).diff().shift(-1)
+        )
+        print(f"Walkforward {strat} strategy:")
+        print(f"  Profit Factor: {pf:.2f}")
+        print(f"  Sharpe Ratio: {sharpe:.2f}\n")
+        plot_strategy_cumulative_log_returns(returns_df, wf_signal, f"{strat} (WF)")"""
     plt.show()
