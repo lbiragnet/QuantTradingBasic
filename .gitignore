@@ -1,1 +1,6 @@
 .env
+
+# Ignore build and .vscode directories inside order-book-simulator
+order-book-simulator/build/
+order-book-simulator/.vscode/
+order-book-simulator/CMakeLists.txt
